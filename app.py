@@ -15,10 +15,10 @@ if "user_info" not in st.session_state:
 
 # สิทธิ์ผู้ใช้งาน
 USER_DATABASE = {
-    "admin": {"password": "adminpassword", "name": "ผู้ดูแลระบบ", "role": "Admin"},
+    "sak191": {"password": "88888888", "name": "ผู้ดูแลระบบ", "role": "Admin"},
     "store": {"password": "store123", "name": "พนักงานคลังวัตถุดิบ", "role": "Store"},
     "planner": {"password": "plan123", "name": "ฝ่ายวางแผนการผลิต", "role": "Planner"},
-    "sales": {"password": "sales123", "name": "ฝ่ายขายและจัดส่ง", "role": "Sales"}
+    "prajak": {"password": "123456", "name": "mr.Prajak", "role": "Sales"}
 }
 
 # 1. สต็อกวัตถุดิบและอุปกรณ์ (RM & Tooling)
