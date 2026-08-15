@@ -15,10 +15,10 @@ if "user_info" not in st.session_state:
 
 # สิทธิ์ผู้ใช้งาน
 USER_DATABASE = {
-    "sak191": {"password": "88888888", "name": "ผู้ดูแลระบบ", "role": "Admin"},
+    "admin": {"password": "88888888", "name": "ผู้ดูแลระบบ", "role": "Admin"},
     "store": {"password": "store123", "name": "พนักงานคลังวัตถุดิบ", "role": "Store"},
     "planner": {"password": "plan123", "name": "ฝ่ายวางแผนการผลิต", "role": "Planner"},
-    "prajak": {"password": "123456", "name": "mr.Prajak", "role": "Sales"}
+    "sales": {"password": "sales123", "name": "ฝ่ายขายและจัดส่ง", "role": "Sales"}
 }
 
 # 1. สต็อกวัตถุดิบและอุปกรณ์ (RM & Tooling)
@@ -292,9 +292,6 @@ def main_app():
 # 4. APP CONTROLLER
 # =====================================================================
 if not st.session_state.logged_in:
-    login_screen()
-else:
-    main_app()
     login_screen()
 else:
     main_app()
