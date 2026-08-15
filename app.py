@@ -16,6 +16,8 @@ if "user_info" not in st.session_state:
 # สิทธิ์ผู้ใช้งาน
 USER_DATABASE = {
     "admin": {"password": "88888888", "name": "ผู้ดูแลระบบ", "role": "Admin"},
+    "prajak": {"password": "123456", "name": "ผู้จัดการโรงงาน", "role": "Manager"},
+    "pram": {"password": "55555", "name": "ผู้จัดการฝ่ายผลิต", "role": "Manager"},
     "store": {"password": "store123", "name": "พนักงานคลังวัตถุดิบ", "role": "Store"},
     "planner": {"password": "plan123", "name": "ฝ่ายวางแผนการผลิต", "role": "Planner"},
     "sales": {"password": "sales123", "name": "ฝ่ายขายและจัดส่ง", "role": "Sales"}
