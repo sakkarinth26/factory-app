@@ -2,12 +2,11 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 
-st.set_page_config(page_title="ระบบควบคุมสินค้า & การผลิต", layout="wide")
+st.set_page_config(page_title="ระบบควบคุมสินค้า & การผลิต", layout="wide", initial_sidebar_state="collapsed")
 
 # =====================================================================
 # 1. CONSTANTS & USER DATABASE WITH ROLES
 # =====================================================================
-# กำหนดสิทธิ์: "Admin" (เข้าได้หมด), "Warehouse" (เข้าได้แค่คลัง), "Production" (เข้าได้แค่ฝ่ายผลิต)
 USER_DATABASE = {
     "admin": {"password": "888", "name": "ผู้ดูแลระบบ", "role": "Admin"},
     "wh_staff": {"password": "123", "name": "พนักงานคลังสินค้า", "role": "Warehouse"},
@@ -18,8 +17,8 @@ if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "user_info" not in st.session_state:
     st.session_state.user_info = None
-if "current_module" not in st.session_state:
-    st.session_state.current_module = "Main Dashboard"
+if "current_page" not in st.session_state:
+    st.session_state.current_page = "main_menu"
 
 # ฐานข้อมูลจำลอง (RM, FG, Jobs)
 if "inventory_rm" not in st.session_state:
@@ -44,6 +43,14 @@ if "jobs" not in st.session_state:
 if "issued_materials" not in st.session_state:
     st.session_state.issued_materials = pd.DataFrame(columns=["job_id", "target_wip", "rm_code", "rm_name", "qty", "unit", "issue_date"])
 
+# ซ่อนแถบ Sidebar ของ Streamlit ด้วย CSS
+st.markdown("""
+    <style>
+        [data-testid="collapsedControl"] {display: none;}
+        section[data-testid="stSidebar"] {display: none;}
+    </style>
+""", unsafe_allow_html=True)
+
 # =====================================================================
 # 2. LOGIN SCREEN
 # =====================================================================
@@ -59,7 +66,7 @@ def login_screen():
                 if username in USER_DATABASE and USER_DATABASE[username]["password"] == password:
                     st.session_state.logged_in = True
                     st.session_state.user_info = USER_DATABASE[username]
-                    st.session_state.current_module = "Main Dashboard"
+                    st.session_state.current_page = "main_menu"
                     st.rerun()
                 else:
                     st.error("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง")
@@ -71,66 +78,72 @@ def main_app():
     user = st.session_state.user_info
     role = user["role"]
 
-    # -------------------------------------------------------------
-    # เมนูฝั่งซ้าย (Sidebar Routing ตามภาพ)
-    # -------------------------------------------------------------
-    st.sidebar.markdown(f"### 👤 {user['name']}")
-    st.sidebar.caption(f"สิทธิ์การใช้งาน: **{role}**")
-    st.sidebar.markdown("---")
-
-    # กรองการแสดงผลเมนูตาม Role
-    available_menu = []
-    if role in ["Admin", "Warehouse", "Production"]:
-        available_menu.append("🏠 หน้าหลัก (Main Dashboard)")
-    if role in ["Admin", "Warehouse"]:
-        available_menu.append("📦 1. คลังวัตถุดิบ (RM Stock)")
-        available_menu.append("🏆 4. คลังสินค้าสำเร็จรูป (FG Stock)")
-        available_menu.append("📜 5. ประวัติการทำรายการ")
-    if role in ["Admin", "Production"]:
-        available_menu.append("🏗️ 2. เปิด Job & จ่าย RM เข้า WIP")
-        available_menu.append("🔄 3. ติดตาม & เคลื่อนย้าย WIP")
-
-    # ตัวเลือกเมนูด้านซ้ายแบบ Radio
-    selected_menu = st.sidebar.radio("เลือกเมนูการทำงาน:", available_menu)
-
-    st.sidebar.markdown("---")
-    if st.sidebar.button("🚪 ออกจากระบบ", use_container_width=True):
-        st.session_state.logged_in = False
-        st.session_state.user_info = None
-        st.rerun()
+    # Header ส่วนบนสุด
+    head_col1, head_col2 = st.columns([3, 1])
+    with head_col1:
+        st.title("🏭 ระบบคลังสินค้า & ควบคุมกระบวนการผลิต")
+        st.caption(f"👤 ผู้ใช้งาน: **{user['name']}** | สิทธิ์การใช้งาน: **{role}**")
+    with head_col2:
+        st.write("")
+        if st.button("🚪 ออกจากระบบ", use_container_width=True):
+            st.session_state.logged_in = False
+            st.session_state.user_info = None
+            st.rerun()
+            
+    st.markdown("---")
 
     # -------------------------------------------------------------
-    # หน้า 1: หน้าจอหลักแสดงปุ่มใหญ่ 2 ปุ่ม (ตามภาพวาด)
+    # 📍 หน้าหลัก (Main Dashboard) แสดงเมนูกลางแบบไม่มี Sidebar
     # -------------------------------------------------------------
-    if selected_menu == "🏠 หน้าหลัก (Main Dashboard)":
-        st.markdown("<h1 style='text-align: center;'>🏭 ระบบควบคุมสินค้าและการผลิต</h1>", unsafe_allow_html=True)
-        st.markdown("---")
+    if st.session_state.current_page == "main_menu":
+        col_wh, col_prod = st.columns(2)
         
-        col1, col2 = st.columns(2)
-        
-        # ปุ่มเข้า คลัง RM / FG
-        with col1:
+        # --- 📦 โซนคลังสินค้า (RM / FG) ---
+        with col_wh:
             st.markdown("### 📦 คลัง RM / FG")
             if role in ["Admin", "Warehouse"]:
-                if st.button("เข้าใช้งานระบบคลังสินค้า (RM & FG)", key="btn_wh", use_container_width=True):
-                    st.info("กรุณาเลือกเมนูฝั่งซ้าย: '1. คลังวัตถุดิบ' หรือ '4. คลังสินค้าสำเร็จรูป'")
+                if st.button("📦 1. สต็อกวัตถุดิบ (RM Stock)", use_container_width=True):
+                    st.session_state.current_page = "rm_stock"
+                    st.rerun()
+                st.write("")
+                if st.button("🏆 4. สต็อกสินค้าสำเร็จรูป (FG Stock)", use_container_width=True):
+                    st.session_state.current_page = "fg_stock"
+                    st.rerun()
+                st.write("")
+                if st.button("📜 5. ประวัติการทำรายการ", use_container_width=True):
+                    st.session_state.current_page = "history"
+                    st.rerun()
             else:
-                st.error("❌ คุณไม่มีสิทธิ์เข้าถึงส่วนนี้ (เฉพาะฝ่ายคลังสินค้า)")
+                st.error("🔒 คุณไม่มีสิทธิ์เข้าถึงส่วนงานคลังสินค้า (เฉพาะฝ่ายคลัง)")
 
-        # ปุ่มเข้า Production
-        with col2:
+        # --- 🏭 โซนฝ่ายผลิต (Production) ---
+        with col_prod:
             st.markdown("### 🏭 Production")
             if role in ["Admin", "Production"]:
-                if st.button("เข้าใช้งานระบบติดตามการผลิต (WIP)", key="btn_prod", use_container_width=True):
-                    st.info("กรุณาเลือกเมนูฝั่งซ้าย: '2. เปิด Job' หรือ '3. ติดตาม WIP'")
+                if st.button("🏗️ 2. เปิด Job & จ่าย RM เข้า WIP", use_container_width=True):
+                    st.session_state.current_page = "open_job"
+                    st.rerun()
+                st.write("")
+                if st.button("🔄 3. ติดตาม & เคลื่อนย้าย WIP", use_container_width=True):
+                    st.session_state.current_page = "track_wip"
+                    st.rerun()
             else:
-                st.error("❌ คุณไม่มีสิทธิ์เข้าถึงส่วนนี้ (เฉพาะฝ่ายผลิต)")
+                st.error("🔒 คุณไม่มีสิทธิ์เข้าถึงส่วนงานการผลิต (เฉพาะฝ่ายผลิต)")
 
     # -------------------------------------------------------------
-    # หน้า 2: คลังวัตถุดิบ (RM Stock)
+    # ปุ่มย้อนกลับ (เมื่อกดเข้าไปในหน้าย่อย)
     # -------------------------------------------------------------
-    elif selected_menu.startswith("📦 1"):
-        st.subheader("📦 สต็อกวัตถุดิบในคลัง (RM)")
+    else:
+        if st.button("⬅️ กลับสู่หน้าหลัก (Main Dashboard)"):
+            st.session_state.current_page = "main_menu"
+            st.rerun()
+        st.markdown("---")
+
+    # -------------------------------------------------------------
+    # หน้าย่อย 1: คลังวัตถุดิบ (RM Stock)
+    # -------------------------------------------------------------
+    if st.session_state.current_page == "rm_stock":
+        st.subheader("📦 สต็อกวัตถุดิบในคลัง (RM Stock)")
         
         with st.expander("📥 บันทึกรับเข้าวัตถุดิบใหม่"):
             with st.form("rec_rm"):
@@ -152,9 +165,9 @@ def main_app():
         st.dataframe(st.session_state.inventory_rm, use_container_width=True)
 
     # -------------------------------------------------------------
-    # หน้า 3: เปิด Job & จ่าย RM เข้า WIP
+    # หน้าย่อย 2: เปิด Job & จ่าย RM เข้า WIP
     # -------------------------------------------------------------
-    elif selected_menu.startswith("🏗️ 2"):
+    elif st.session_state.current_page == "open_job":
         st.subheader("🏗️ เปิด Job Order ใหม่ & จ่าย RM ตรงเข้า WIP")
         tab_new, tab_issue = st.tabs(["🚀 เปิด Job ใหม่", "📤 จ่าย RM เข้า WIP"])
         
@@ -212,9 +225,9 @@ def main_app():
                         st.rerun()
 
     # -------------------------------------------------------------
-    # หน้า 4: ติดตาม & เคลื่อนย้าย WIP
+    # หน้าย่อย 3: ติดตาม & เคลื่อนย้าย WIP
     # -------------------------------------------------------------
-    elif selected_menu.startswith("🔄 3"):
+    elif st.session_state.current_page == "track_wip":
         st.subheader("🔄 ระบบติดตาม WIP & การไหลของงาน")
         st.dataframe(st.session_state.jobs, use_container_width=True)
         st.markdown("---")
@@ -252,16 +265,16 @@ def main_app():
                     st.rerun()
 
     # -------------------------------------------------------------
-    # หน้า 5: คลังสินค้าสำเร็จรูป (FG Stock)
+    # หน้าย่อย 4: คลังสินค้าสำเร็จรูป (FG Stock)
     # -------------------------------------------------------------
-    elif selected_menu.startswith("🏆 4"):
-        st.subheader("🏆 รายการสินค้าสำเร็จรูปในคลัง (FG)")
+    elif st.session_state.current_page == "fg_stock":
+        st.subheader("🏆 รายการสินค้าสำเร็จรูปในคลัง (FG Stock)")
         st.dataframe(st.session_state.inventory_fg, use_container_width=True)
 
     # -------------------------------------------------------------
-    # หน้า 6: ประวัติการทำรายการ
+    # หน้าย่อย 5: ประวัติการทำรายการ
     # -------------------------------------------------------------
-    elif selected_menu.startswith("📜 5"):
+    elif st.session_state.current_page == "history":
         st.subheader("📜 ประวัติการจ่ายวัตถุดิบเข้า WIP")
         st.dataframe(st.session_state.issued_materials, use_container_width=True)
 
