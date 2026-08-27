@@ -2,433 +2,291 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 
-# ตั้งค่าหน้าเว็บ
-st.set_page_config(page_title="Flexible Packaging ERP & WIP System", layout="wide", page_icon="🏭")
+st.set_page_config(page_title="ระบบบริหารคลังและไลน์ผลิต Flexible Packaging", layout="wide")
 
 # =====================================================================
-# 1. INITIAL SESSION STATES & MOCK DATA
+# 1. CONSTANTS & INITIAL SESSION STATE
 # =====================================================================
+USER_DATABASE = {
+    "admin": {"password": "88888888", "name": "ผู้ดูแลระบบ", "role": "Admin"},
+    "prajak": {"password": "123456", "name": "Mr.Prajak", "role": "Manager"},
+    "operator": {"password": "1234", "name": "พนักงานคลัง/ไลน์ผลิต", "role": "User"}
+}
+
+PROCESS_STAGES = [
+    "WIP 1: Print (พิมพ์ลาย)",
+    "WIP 2: Dry 1 (ประกบชั้นที่ 1)",
+    "WIP 3: Dry 2 (ประกบชั้นที่ 2)",
+    "WIP 4: Slit (ตัดแบ่งม้วน)",
+    "WIP 5: Bag Making (ขึ้นรูปถุง/ซอง)",
+    "WIP 6: Spout (ติดจุก)",
+    "WIP 7: Packing (แพ็กเกจจิ้ง)",
+    "FG: สินค้าสำเร็จรูป"
+]
+
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "user_info" not in st.session_state:
     st.session_state.user_info = None
 
-# สิทธิ์ผู้ใช้งาน
-USER_DATABASE = {
-    "admin": {"password": "88888888", "name": "ผู้ดูแลระบบ", "role": "Admin"},
-    "prajak": {"password": "123456", "name": "ผู้จัดการโรงงาน", "role": "Manager"},
-    "pram": {"password": "55555", "name": "ผู้จัดการฝ่ายผลิต", "role": "Manager"},
-    "store": {"password": "store123", "name": "พนักงานคลังวัตถุดิบ", "role": "Store"},
-    "planner": {"password": "plan123", "name": "ฝ่ายวางแผนการผลิต", "role": "Planner"},
-    "sales": {"password": "sales123", "name": "ฝ่ายขายและจัดส่ง", "role": "Sales"}
-}
-
-# 8 WIP Production Steps
-WIP_STAGES = [
-    "WIP 1: เตรียมวัตถุดิบ & แม่พิมพ์ (Pre-Production)",
-    "WIP 2: พิมพ์ลาย (Printing)",
-    "WIP 3: ประกบแห้ง (Dry Lamination)",
-    "WIP 4: ประกบไร้ตัวทำละลาย (Solventless Lamination)",
-    "WIP 5: บ่มกาว (Curing / Aging Room)",
-    "WIP 6: ตัดม้วน (Slitting)",
-    "WIP 7: ขึ้นรูปถุง / พับซอง (Bag / Pouch Making)",
-    "WIP 8: ตรวจสอบคุณภาพและแพ็กเกจ (QC & Packaging)"
-]
-
-# 1. สต็อกวัตถุดิบและอุปกรณ์ (RM & Tooling)
-if "rm_inventory" not in st.session_state:
-    st.session_state.rm_inventory = pd.DataFrame([
-        {"code": "RM-FILM-001", "name": "ม้วนฟิล์ม PET 12 micron", "category": "ม้วนฟิล์ม", "qty": 2500.0, "unit": "Kg"},
-        {"code": "RM-FILM-002", "name": "ม้วนฟิล์ม LLDPE 40 micron", "category": "ม้วนฟิล์ม", "qty": 3800.0, "unit": "Kg"},
-        {"code": "RM-CHEM-001", "name": "กาวประกบ PU (Solventless)", "category": "กาว/เคมีภัณฑ์", "qty": 450.0, "unit": "Kg"},
-        {"code": "RM-CYL-101", "name": "บล็อกแม่พิมพ์ - ซองกาแฟ 250g (ชุด 5 สี)", "category": "บล็อกแม่พิมพ์", "qty": 1.0, "unit": "ชุด"},
+# คลังวัตถุดิบ (RM)
+if "inventory_rm" not in st.session_state:
+    st.session_state.inventory_rm = pd.DataFrame([
+        {"code": "RM-001", "name": "ม้วนฟิล์ม PET 12u", "qty": 5000.0, "unit": "Kg"},
+        {"code": "RM-002", "name": "ม้วนฟิล์ม LLDPE 40u", "qty": 4000.0, "unit": "Kg"},
+        {"code": "RM-003", "name": "หมึกพิมพ์ Solvent Base", "qty": 300.0, "unit": "Kg"},
+        {"code": "RM-004", "name": "กาว PU Dry Lamination", "qty": 500.0, "unit": "Kg"},
+        {"code": "RM-005", "name": "จุกฝาเกลียว (Spout 10mm)", "qty": 50000.0, "unit": "ชิ้น"}
     ])
 
-# 2. รายการ Job การผลิต
-if "wip_jobs" not in st.session_state:
-    st.session_state.wip_jobs = pd.DataFrame([
+# คลังสินค้าสำเร็จรูป (FG)
+if "inventory_fg" not in st.session_state:
+    st.session_state.inventory_fg = pd.DataFrame(columns=["job_id", "product_name", "qty", "unit", "in_date"])
+
+# Job การผลิต & WIP Tracking
+if "jobs" not in st.session_state:
+    st.session_state.jobs = pd.DataFrame([
         {
             "job_id": "JOB-2026-001",
-            "product_name": "ถุงกาแฟสกรีน 250g",
-            "customer": "บริษัท กาแฟไทย จำกัด",
-            "target_qty": 50000,
+            "product_name": "ซองติดจุก 250ml",
+            "job_type": "ซองติดจุก (Spout)",
+            "current_stage": "WIP 1: Print (พิมพ์ลาย)",
+            "target_qty": 20000,
             "unit": "ซอง",
-            "current_stage": "WIP 2: พิมพ์ลาย (Printing)",
-            "start_date": "2026-08-10",
-            "remark": "พิมพ์ 5 สี ด้านล่างมีซิปล็อค"
+            "start_date": "2026-08-27"
         }
     ])
 
-# 3. รายการผูกวัตถุดิบสำหรับแต่ละ Job (Job Materials Requirement / BOM & Issue Status)
-if "job_materials" not in st.session_state:
-    st.session_state.job_materials = pd.DataFrame([
-        {
-            "job_id": "JOB-2026-001",
-            "rm_code": "RM-CYL-101",
-            "rm_name": "บล็อกแม่พิมพ์ - ซองกาแฟ 250g (ชุด 5 สี)",
-            "req_qty": 1.0,
-            "unit": "ชุด",
-            "target_wip": "WIP 1: เตรียมวัตถุดิบ & แม่พิมพ์ (Pre-Production)",
-            "status": "ISSUED (เบิกแล้ว)"
-        },
-        {
-            "job_id": "JOB-2026-001",
-            "rm_code": "RM-FILM-001",
-            "rm_name": "ม้วนฟิล์ม PET 12 micron",
-            "req_qty": 350.0,
-            "unit": "Kg",
-            "target_wip": "WIP 2: พิมพ์ลาย (Printing)",
-            "status": "ISSUED (เบิกแล้ว)"
-        },
-        {
-            "job_id": "JOB-2026-001",
-            "rm_code": "RM-CHEM-001",
-            "rm_name": "กาวประกบ PU (Solventless)",
-            "req_qty": 50.0,
-            "unit": "Kg",
-            "target_wip": "WIP 4: ประกบไร้ตัวทำละลาย (Solventless Lamination)",
-            "status": "PENDING (รอเบิก)"
-        },
-        {
-            "job_id": "JOB-2026-001",
-            "rm_code": "RM-FILM-002",
-            "rm_name": "ม้วนฟิล์ม LLDPE 40 micron",
-            "req_qty": 400.0,
-            "unit": "Kg",
-            "target_wip": "WIP 4: ประกบไร้ตัวทำละลาย (Solventless Lamination)",
-            "status": "PENDING (รอเบิก)"
-        }
-    ])
+# บันทึกการจ่าย RM เข้า WIP
+if "issued_materials" not in st.session_state:
+    st.session_state.issued_materials = pd.DataFrame(columns=["job_id", "target_wip", "rm_code", "rm_name", "qty", "unit", "issue_date"])
 
-# 4. คลังสินค้าสำเร็จรูป (Finished Goods - FG)
-if "fg_inventory" not in st.session_state:
-    st.session_state.fg_inventory = pd.DataFrame([
-        {"fg_code": "FG-POUCH-001", "name": "ถุงซิปล็อคใส 15x23 cm", "customer": "บจก. เอสเอ็มอี ไทย", "in_stock": 15000, "unit": "ซอง", "last_update": "2026-08-14"},
-        {"fg_code": "FG-POUCH-002", "name": "ซองฟอยล์ทึบซีล 3 ด้าน", "customer": "หจก. อาหารไทยสด", "in_stock": 8500, "unit": "ซอง", "last_update": "2026-08-15"}
-    ])
-
-# 5. ประวัติการขาย/ตัดออก (FG Sales/Delivery Log)
-if "fg_sales_log" not in st.session_state:
-    st.session_state.fg_sales_log = pd.DataFrame(columns=["date", "fg_code", "name", "customer", "sold_qty", "unit", "do_number", "operator"])
+# ประวัติ Transaction
+if "history" not in st.session_state:
+    st.session_state.history = pd.DataFrame(columns=["timestamp", "type", "job_id", "detail", "operator"])
 
 # =====================================================================
 # 2. LOGIN SCREEN
 # =====================================================================
 def login_screen():
-    st.markdown("<h2 style='text-align: center;'>🏭 ระบบคลังและการผลิตบรรจุภัณฑ์ชนิดอ่อนตัว</h2>", unsafe_allow_html=True)
-    st.markdown("<h4 style='text-align: center; color: gray;'>Flexible Packaging Production & Multi-WIP Material Management</h4>", unsafe_allow_html=True)
-    st.write("")
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
+    st.markdown("<h2 style='text-align: center;'>🔐 เข้าสู่ระบบบริหารคลังสินค้า & ติดตามงานผลิต</h2>", unsafe_allow_html=True)
+    _, col2, _ = st.columns([1, 2, 1])
     with col2:
         with st.form("login_form"):
-            username = st.text_input("Username (ชื่อผู้ใช้)")
-            password = st.text_input("Password (รหัสผ่าน)", type="password")
-            submit = st.form_submit_button("เข้าสู่ระบบ", use_container_width=True)
-            
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            submit = st.form_submit_button("เข้าสู่ระบบ")
             if submit:
                 if username in USER_DATABASE and USER_DATABASE[username]["password"] == password:
                     st.session_state.logged_in = True
                     st.session_state.user_info = USER_DATABASE[username]
-                    st.success("เข้าสู่ระบบสำเร็จ!")
                     st.rerun()
                 else:
-                    st.error("Username หรือ Password ไม่ถูกต้อง")
+                    st.error("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง")
 
 # =====================================================================
 # 3. MAIN APPLICATION
 # =====================================================================
 def main_app():
     user = st.session_state.user_info
+    st.sidebar.title(f"👤 {user['name']}")
+    st.sidebar.caption(f"สิทธิ์การใช้งาน: {user['role']}")
     
-    # Sidebar
-    st.sidebar.title(f"👤 สวัสดี: {user['name']}")
-    st.sidebar.caption(f"สิทธิ์: {user['role']}")
-    
-    main_menu = st.sidebar.radio(
-        "เลือกส่วนงาน:",
+    menu = st.sidebar.radio(
+        "เลือกเมนูการทำงาน:",
         [
-            "📦 1. คลังวัตถุดิบและอุปกรณ์ (Raw Materials & Tools)",
-            "🏭 2. ติดตามไลน์ผลิต 8 ขั้นตอน (WIP & Material Issue)",
-            "🚚 3. คลังสินค้าสำเร็จรูปและการขาย (FG & Sales)"
+            "📦 1. คลังวัตถุดิบ (RM Stock)",
+            "🏗️ 2. เปิด Job & จ่าย RM เข้า WIP (Print/Dry1/Dry2)",
+            "🔄 3. ติดตาม & เคลื่อนย้าย WIP (ตาม Process Flow)",
+            "🏆 4. คลังสินค้าสำเร็จรูป (FG Stock)",
+            "📜 5. ประวัติการทำรายการ"
         ]
     )
     
-    st.sidebar.markdown("---")
-    if st.sidebar.button("🚪 ออกจากระบบ (Logout)", use_container_width=True):
+    if st.sidebar.button("🚪 ออกจากระบบ", use_container_width=True):
         st.session_state.logged_in = False
-        st.session_state.user_info = None
         st.rerun()
 
-    # =================================================================
-    # ส่วนที่ 1: คลังวัตถุดิบและอุปกรณ์ (RM & TOOLING)
-    # =================================================================
-    if main_menu.startswith("📦 1"):
-        st.title("📦 คลังวัตถุดิบและอุปกรณ์การผลิต")
-        st.caption("จัดเก็บและติดตามสต็อกม้วนฟิล์ม, กาว/เคมีภัณฑ์ และบล็อกแม่พิมพ์")
+    st.title("🏭 ระบบคลังสินค้า & ควบคุมกระบวนการผลิต (Flexible Packaging)")
+    st.markdown("---")
+
+    # -------------------------------------------------------------
+    # เมนู 1: คลังวัตถุดิบ (RM Stock)
+    # -------------------------------------------------------------
+    if menu.startswith("📦 1"):
+        st.subheader("📦 สต็อกวัตถุดิบในคลัง (RM)")
         
-        tab1, tab2 = st.tabs(["📋 รายการสต็อกปัจจุบัน", "➕ รับเข้าวัตถุดิบใหม่"])
+        with st.expander("📥 บันทึกรับเข้าวัตถุดิบใหม่"):
+            with st.form("rec_rm"):
+                c1, c2, c3, c4 = st.columns(4)
+                code = c1.text_input("รหัส RM")
+                name = c2.text_input("ชื่อวัตถุดิบ")
+                qty = c3.number_input("จำนวนรับเข้า", min_value=0.1)
+                unit = c4.selectbox("หน่วยนับ", ["Kg", "ม้วน", "ชิ้น", "ชุด"])
+                if st.form_submit_button("💾 รับเข้าคลัง"):
+                    idx = st.session_state.inventory_rm[st.session_state.inventory_rm['code'] == code].index
+                    if len(idx) > 0:
+                        st.session_state.inventory_rm.loc[idx[0], 'qty'] += qty
+                    else:
+                        new_rm = {"code": code, "name": name, "qty": qty, "unit": unit}
+                        st.session_state.inventory_rm = pd.concat([st.session_state.inventory_rm, pd.DataFrame([new_rm])], ignore_index=True)
+                    st.success("บันทึกรับเข้าเรียบร้อย")
+                    st.rerun()
+                    
+        st.dataframe(st.session_state.inventory_rm, use_container_width=True)
+
+    # -------------------------------------------------------------
+    # เมนู 2: เปิด Job & จ่าย RM เข้า WIP
+    # -------------------------------------------------------------
+    elif menu.startswith("🏗️ 2"):
+        st.subheader("🏗️ เปิด Job Order ใหม่ & จ่าย RM ตรงเข้า WIP (Print / Dry1 / Dry2)")
         
-        with tab1:
-            st.subheader("รายการวัตถุดิบและแม่พิมพ์คงคลัง")
-            st.dataframe(st.session_state.rm_inventory, use_container_width=True)
-            
-        with tab2:
-            st.subheader("บันทึกรับวัตถุดิบเข้าคลัง")
-            with st.form("rm_update_form"):
-                rm_codes = [f"{r['code']} - {r['name']}" for _, r in st.session_state.rm_inventory.iterrows()]
-                selected_rm = st.selectbox("เลือกวัตถุดิบ/แม่พิมพ์:", rm_codes)
-                change_qty = st.number_input("จำนวนที่รับเข้า:", min_value=0.1, step=10.0)
-                submit_rm = st.form_submit_button("📥 บันทึกรับเข้าสต็อก")
+        tab_new, tab_issue = st.tabs(["🚀 เปิด Job ใหม่", "📤 จ่าย RM เข้า WIP"])
+        
+        with tab_new:
+            with st.form("create_job"):
+                j_id = st.text_input("เลขที่ Job Order (เช่น JOB-2026-002)")
+                p_name = st.text_input("ชื่อสินค้า/ซองบรรจุภัณฑ์")
+                j_type = st.selectbox("ประเภทปลายทางการผลิต:", [
+                    "งานม้วน (Dry2 -> Slit -> Packing)",
+                    "ซองไม่ติดจุก (Dry2 -> Bag Making -> Packing)",
+                    "ซองผ่านการตัดม้วน (Dry2 -> Slit -> Bag Making -> Packing)",
+                    "ซองติดจุก (Spout)"
+                ])
+                t_qty = st.number_input("จำนวนที่ต้องการผลิต", min_value=1, value=10000)
+                u_name = st.selectbox("หน่วยผลิต", ["ซอง", "ม้วน", "ชิ้น"])
                 
-                if submit_rm:
-                    code_target = selected_rm.split(" - ")[0]
-                    idx = st.session_state.rm_inventory[st.session_state.rm_inventory['code'] == code_target].index[0]
-                    st.session_state.rm_inventory.loc[idx, 'qty'] += change_qty
-                    st.success(f"เพิ่มสต็อก {code_target} จำนวน {change_qty} เรียบร้อย!")
+                if st.form_submit_button("💾 บันทึกเปิด Job"):
+                    job_data = {
+                        "job_id": j_id, "product_name": p_name, "job_type": j_type,
+                        "current_stage": "WIP 1: Print (พิมพ์ลาย)", "target_qty": t_qty,
+                        "unit": u_name, "start_date": datetime.now().strftime("%Y-%m-%d")
+                    }
+                    st.session_state.jobs = pd.concat([st.session_state.jobs, pd.DataFrame([job_data])], ignore_index=True)
+                    st.success(f"เปิด Job {j_id} เรียบร้อยแล้ว")
                     st.rerun()
 
-    # =================================================================
-    # ส่วนที่ 2: ติดตามไลน์ผลิต 8 ขั้นตอน & การเบิกวัตถุดิบเข้า WIP
-    # =================================================================
-    elif main_menu.startswith("🏭 2"):
-        st.title("🏭 ติดตามไลน์ผลิต 8 ขั้นตอน & เบิกวัตถุดิบเข้า WIP")
-        
-        tab_wip_1, tab_wip_2, tab_wip_3, tab_wip_4 = st.tabs([
-            "📊 สถานะ Job & การเบิกวัตถุดิบ", 
-            "📤 เบิกวัตถุดิบเข้า WIP", 
-            "🔄 อัปเดตขั้นตอน Job", 
-            "➕ เปิด Job ผลิตใหม่ + กำหนด BOM"
-        ])
-        
-        # TAB 1: OVERVIEW & MATERIAL TRACKING
-        with tab_wip_1:
-            st.subheader("1. รายการ Job Order ทั้งหมด")
-            st.dataframe(st.session_state.wip_jobs, use_container_width=True)
-            
-            st.markdown("---")
-            st.subheader("2. ตรวจสอบการใช้วัตถุดิบแยกตาม WIP ของ Job")
-            
-            if not st.session_state.wip_jobs.empty:
-                job_list_view = st.selectbox("เลือก Job Order เพื่อดูรายละเอียดการใช้วัตถุดิบ:", st.session_state.wip_jobs['job_id'].tolist())
+        with tab_issue:
+            st.markdown("##### 🎯 เลือกตัดจ่าย RM ไปยังจุดใช้งาน (ตาม Diagram: Print / Dry 1 / Dry 2)")
+            with st.form("issue_rm"):
+                job_list = st.session_state.jobs['job_id'].tolist()
+                sel_job = st.selectbox("เลือก Job Order:", job_list if job_list else ["ไม่มี Job"])
+                target_wip = st.selectbox("จ่ายตรงไปยัง WIP ขั้นตอน:", [
+                    "WIP 1: Print (จ่าย ฟิล์ม/หมึก)",
+                    "WIP 2: Dry 1 (จ่าย ฟิล์ม/กาว)",
+                    "WIP 3: Dry 2 (จ่าย ฟิล์ม/กาว)",
+                    "WIP 6: Spout (จ่าย จุก/ฝา)"
+                ])
                 
-                job_mat_filtered = st.session_state.job_materials[st.session_state.job_materials['job_id'] == job_list_view]
-                st.write(f"📋 **วัตถุดิบและ WIP ที่ต้องส่งไปใช้ สำหรับ `{job_list_view}`:**")
-                st.dataframe(job_mat_filtered, use_container_width=True)
-            else:
-                st.info("ยังไม่มีข้อมูล Job ผลิต")
+                rm_opts = [f"{r['code']} - {r['name']} (คงเหลือ {r['qty']} {r['unit']})" for _, r in st.session_state.inventory_rm.iterrows()]
+                sel_rm = st.selectbox("เลือกวัตถุดิบ (RM):", rm_opts)
+                iss_qty = st.number_input("จำนวนที่เบิกจ่าย", min_value=0.1)
+                
+                if st.form_submit_button("🚀 ตัดสต็อก & จ่ายวัตถุดิบ"):
+                    rm_code = sel_rm.split(" - ")[0]
+                    idx = st.session_state.inventory_rm[st.session_state.inventory_rm['code'] == rm_code].index[0]
+                    curr_qty = st.session_state.inventory_rm.loc[idx, 'qty']
+                    
+                    if curr_qty < iss_qty:
+                        st.error("สต็อก RM ไม่พอ!")
+                    else:
+                        st.session_state.inventory_rm.loc[idx, 'qty'] -= iss_qty
+                        iss_entry = {
+                            "job_id": sel_job, "target_wip": target_wip, "rm_code": rm_code,
+                            "rm_name": st.session_state.inventory_rm.loc[idx, 'name'],
+                            "qty": iss_qty, "unit": st.session_state.inventory_rm.loc[idx, 'unit'],
+                            "issue_date": datetime.now().strftime("%Y-%m-%d %H:%M")
+                        }
+                        st.session_state.issued_materials = pd.concat([st.session_state.issued_materials, pd.DataFrame([iss_entry])], ignore_index=True)
+                        st.success(f"จ่าย {st.session_state.inventory_rm.loc[idx, 'name']} เข้า {target_wip} เรียบร้อย!")
+                        st.rerun()
 
-        # TAB 2: MATERIAL ISSUE TO SPECIFIC WIP
-        with tab_wip_2:
-            st.subheader("📤 เบิกวัตถุดิบจ่ายตรงไปยัง WIP")
-            st.caption("ระบบจะตัดสต็อกวัตถุดิบจากคลัง และเปลี่ยนสถานะวัตถุดิบเป็น ISSUED")
-            
-            # กรองเฉพาะวัตถุดิบที่ยังไม่ได้เบิก (PENDING)
-            pending_mats = st.session_state.job_materials[st.session_state.job_materials['status'] == "PENDING (รอเบิก)"]
-            
-            if pending_mats.empty:
-                st.success("🎉 วัตถุดิบสำหรับทุก Job ถูกเบิกจ่ายเข้า WIP ครบถ้วนแล้ว!")
-            else:
-                with st.form("issue_material_form"):
-                    mat_options = [
-                        f"ID:{idx} | Job: {r['job_id']} | วัตถุดิบ: {r['rm_name']} | ส่งไป: {r['target_wip']} | จำนวน: {r['req_qty']} {r['unit']}"
-                        for idx, r in pending_mats.iterrows()
+    # -------------------------------------------------------------
+    # เมนู 3: ติดตาม & เคลื่อนย้าย WIP (ตาม Process Flow)
+    # -------------------------------------------------------------
+    elif menu.startswith("🔄 3"):
+        st.subheader("🔄 ระบบติดตาม WIP & การไหลของงาน (ตาม Flow Chart)")
+        
+        # แสดงสถานะ Job ในปัจจุบัน
+        st.dataframe(st.session_state.jobs, use_container_width=True)
+        st.markdown("---")
+        
+        st.markdown("#### ⚡ บันทึกส่งมอบงานข้ามขั้นตอน WIP")
+        if not st.session_state.jobs.empty:
+            with st.form("move_wip"):
+                sel_job_id = st.selectbox("เลือก Job ที่ต้องการย้ายขั้นตอน:", st.session_state.jobs['job_id'].tolist())
+                job_curr_info = st.session_state.jobs[st.session_state.jobs['job_id'] == sel_job_id].iloc[0]
+                
+                st.info(f"📍 ขั้นตอนปัจจุบัน: **{job_curr_info['current_stage']}** | ประเภทงาน: **{job_curr_info['job_type']}**")
+                
+                # Dynamic Routing based on diagram
+                next_stage_options = []
+                curr = job_curr_info['current_stage']
+                
+                if "WIP 1: Print" in curr:
+                    next_stage_options = ["WIP 2: Dry 1 (ประกบชั้นที่ 1) [ฟิล์มพิมพ์แล้ว]"]
+                elif "WIP 2: Dry 1" in curr:
+                    next_stage_options = ["WIP 3: Dry 2 (ประกบชั้นที่ 2) [ฟิล์มพิมพ์ประกบ 2 ชั้น]"]
+                elif "WIP 3: Dry 2" in curr:
+                    next_stage_options = [
+                        "WIP 4: Slit (ตัดแบ่งม้วน) [แบ่งม้วน/ม้วนส่งถุง]",
+                        "WIP 5: Bag Making (ขึ้นรูปถุง/ซอง) [ไปแบบไม่ผ่านตัดม้วน]"
                     ]
-                    selected_mat_item = st.selectbox("เลือกรายการวัตถุดิบที่ต้องการเบิก:", mat_options)
-                    submit_issue = st.form_submit_button("🚀 ยืนยันการเบิกจ่ายวัตถุดิบเข้า WIP")
-                    
-                    if submit_issue:
-                        mat_idx = int(selected_mat_item.split(" | ")[0].replace("ID:", ""))
-                        target_job = st.session_state.job_materials.loc[mat_idx, 'job_id']
-                        rm_code = st.session_state.job_materials.loc[mat_idx, 'rm_code']
-                        req_qty = st.session_state.job_materials.loc[mat_idx, 'req_qty']
-                        target_wip = st.session_state.job_materials.loc[mat_idx, 'target_wip']
-                        
-                        # ตรวจสอบสต็อกคลัง
-                        rm_idx = st.session_state.rm_inventory[st.session_state.rm_inventory['code'] == rm_code].index[0]
-                        current_stock = st.session_state.rm_inventory.loc[rm_idx, 'qty']
-                        
-                        if current_stock >= req_qty:
-                            # ตัดสต็อก RM
-                            st.session_state.rm_inventory.loc[rm_idx, 'qty'] -= req_qty
-                            # อัปเดตสถานะใน Job Materials
-                            st.session_state.job_materials.loc[mat_idx, 'status'] = "ISSUED (เบิกแล้ว)"
-                            st.success(f"เบิก `{rm_code}` จำนวน {req_qty} จ่ายเข้า `{target_wip}` สำหรับ Job `{target_job}` เรียบร้อย!")
-                            st.rerun()
-                        else:
-                            st.error(f"วัตถุดิบในคลังไม่พอ! มีอยู่ {current_stock} แต่ต้องใช้ {req_qty}")
+                elif "WIP 4: Slit" in curr:
+                    next_stage_options = [
+                        "WIP 7: Packing (งานม้วนจบที่แพ็กเกจจิ้ง)",
+                        "WIP 5: Bag Making (ส่งต่อขึ้นรูปซอง)"
+                    ]
+                elif "WIP 5: Bag Making" in curr:
+                    next_stage_options = [
+                        "WIP 6: Spout (ไปขั้นตอนติดจุก)",
+                        "WIP 7: Packing (ซองไม่ติดจุก เข้าแพ็กเกจจิ้ง)"
+                    ]
+                elif "WIP 6: Spout" in curr:
+                    next_stage_options = ["WIP 7: Packing (ซองติดจุก เข้าแพ็กเกจจิ้ง)"]
+                elif "WIP 7: Packing" in curr:
+                    next_stage_options = ["FG: สินค้าสำเร็จรูป (โอนเข้าคลัง FG)"]
 
-        # TAB 3: UPDATE JOB STAGE
-        with tab_wip_3:
-            st.subheader("🔄 ย้ายขั้นตอนการผลิตของ Job")
-            with st.form("move_wip_form"):
-                job_list = [f"{r['job_id']} | {r['product_name']}" for _, r in st.session_state.wip_jobs.iterrows()]
-                selected_job = st.selectbox("เลือก Job Order:", job_list)
-                new_stage = st.selectbox("ย้ายไปยังขั้นตอน:", WIP_STAGES)
-                submit_wip = st.form_submit_button("🔄 อัปเดตสถานะ WIP")
+                selected_next = st.selectbox("เลือกขั้นตอนถัดไป (ตาม Flow):", next_stage_options)
+                completed_qty = st.number_input("จำนวนที่ผลิตได้ในขั้นตอนนี้", min_value=1, value=int(job_curr_info['target_qty']))
                 
-                if submit_wip:
-                    job_id_target = selected_job.split(" | ")[0]
-                    idx = st.session_state.wip_jobs[st.session_state.wip_jobs['job_id'] == job_id_target].index[0]
-                    st.session_state.wip_jobs.loc[idx, 'current_stage'] = new_stage
-                    st.success(f"อัปเดต Job `{job_id_target}` ไปยัง `{new_stage}` เรียบร้อย!")
+                if st.form_submit_button("🚀 บันทึกย้ายไปขั้นตอนถัดไป"):
+                    j_idx = st.session_state.jobs[st.session_state.jobs['job_id'] == sel_job_id].index[0]
+                    
+                    # ถ้าเป็นการย้ายเข้า FG
+                    if "FG: สินค้าสำเร็จรูป" in selected_next:
+                        fg_item = {
+                            "job_id": sel_job_id,
+                            "product_name": job_curr_info['product_name'],
+                            "qty": completed_qty,
+                            "unit": job_curr_info['unit'],
+                            "in_date": datetime.now().strftime("%Y-%m-%d %H:%M")
+                        }
+                        st.session_state.inventory_fg = pd.concat([st.session_state.inventory_fg, pd.DataFrame([fg_item])], ignore_index=True)
+                        st.session_state.jobs.loc[j_idx, 'current_stage'] = "FG: สำเร็จรูป (เสร็จสิ้น)"
+                        st.success(f"🎉 งาน Job {sel_job_id} ผลิตเสร็จสิ้น และโอนเข้าคลัง FG เรียบร้อยแล้ว!")
+                    else:
+                        clean_stage_name = selected_next.split(" [")[0]
+                        st.session_state.jobs.loc[j_idx, 'current_stage'] = clean_stage_name
+                        st.success(f"ย้าย Job {sel_job_id} ไปยัง {clean_stage_name} เรียบร้อย!")
                     st.rerun()
 
-        # TAB 4: NEW JOB & MULTI-MATERIAL BOM
-        with tab_wip_4:
-            st.subheader("➕ เปิด Job ผลิตใหม่ พร้อมกำหนดวัตถุดิบประจำ WIP")
-            
-            with st.form("new_job_multi_form"):
-                col_j1, col_j2 = st.columns(2)
-                with col_j1:
-                    new_job_id = st.text_input("เลขที่ Job Order (เช่น JOB-2026-002)")
-                    p_name = st.text_input("ชื่อสินค้าบรรจุภัณฑ์")
-                with col_j2:
-                    cust_name = st.text_input("ชื่อลูกค้า")
-                    t_qty = st.number_input("จำนวนที่ผลิต:", min_value=100, step=1000)
-                
-                st.markdown("---")
-                st.markdown("##### 🛠️ เลือกวัตถุดิบที่ต้องใช้ใน Job นี้ (เลือกได้สูงสุด 4 ตัว และระบุ WIP ปลายทาง):")
-                
-                rm_list = [f"{r['code']} | {r['name']} ({r['qty']} {r['unit']})" for _, r in st.session_state.rm_inventory.iterrows()]
-                
-                # วัตถุดิบตัวที่ 1
-                col_m1_a, col_m1_b, col_m1_c = st.columns([2, 1, 2])
-                with col_m1_a:
-                    m1_rm = st.selectbox("วัตถุดิบ 1:", ["- ไม่ระบุ -"] + rm_list, key="m1")
-                with col_m1_b:
-                    m1_qty = st.number_input("จำนวนที่ใช้:", min_value=0.0, step=10.0, key="m1_q")
-                with col_m1_c:
-                    m1_wip = st.selectbox("ส่งไปใช้ที่ WIP:", WIP_STAGES, key="m1_w")
-                    
-                # วัตถุดิบตัวที่ 2
-                col_m2_a, col_m2_b, col_m2_c = st.columns([2, 1, 2])
-                with col_m2_a:
-                    m2_rm = st.selectbox("วัตถุดิบ 2:", ["- ไม่ระบุ -"] + rm_list, key="m2")
-                with col_m2_b:
-                    m2_qty = st.number_input("จำนวนที่ใช้:", min_value=0.0, step=10.0, key="m2_q")
-                with col_m2_c:
-                    m2_wip = st.selectbox("ส่งไปใช้ที่ WIP:", WIP_STAGES, index=1, key="m2_w")
+    # -------------------------------------------------------------
+    # เมนู 4: คลังสินค้าสำเร็จรูป (FG Stock)
+    # -------------------------------------------------------------
+    elif menu.startswith("🏆 4"):
+        st.subheader("🏆 รายการสินค้าสำเร็จรูปในคลัง (FG)")
+        st.dataframe(st.session_state.inventory_fg, use_container_width=True)
 
-                # วัตถุดิบตัวที่ 3
-                col_m3_a, col_m3_b, col_m3_c = st.columns([2, 1, 2])
-                with col_m3_a:
-                    m3_rm = st.selectbox("วัตถุดิบ 3:", ["- ไม่ระบุ -"] + rm_list, key="m3")
-                with col_m3_b:
-                    m3_qty = st.number_input("จำนวนที่ใช้:", min_value=0.0, step=10.0, key="m3_q")
-                with col_m3_c:
-                    m3_wip = st.selectbox("ส่งไปใช้ที่ WIP:", WIP_STAGES, index=3, key="m3_w")
+    # -------------------------------------------------------------
+    # เมนู 5: ประวัติการทำรายการ
+    # -------------------------------------------------------------
+    elif menu.startswith("📜 5"):
+        st.subheader("📜 รายการเบิกจ่ายวัตถุดิบเข้า WIP")
+        st.dataframe(st.session_state.issued_materials, use_container_width=True)
 
-                submit_create_job = st.form_submit_button("🚀 บันทึกเปิด Job ผลิต")
-                
-                if submit_create_job:
-                    if new_job_id and p_name:
-                        # 1. เพิ่ม Job ใหม่
-                        new_job_row = {
-                            "job_id": new_job_id, "product_name": p_name, "customer": cust_name,
-                            "target_qty": t_qty, "unit": "ซอง",
-                            "current_stage": WIP_STAGES[0],
-                            "start_date": datetime.now().strftime("%Y-%m-%d"),
-                            "remark": ""
-                        }
-                        st.session_state.wip_jobs = pd.concat([st.session_state.wip_jobs, pd.DataFrame([new_job_row])], ignore_index=True)
-                        
-                        # 2. เพิ่มรายการวัตถุดิบผูก Job
-                        mats_to_add = []
-                        for m_select, q_val, w_target in [(m1_rm, m1_qty, m1_wip), (m2_rm, m2_qty, m2_wip), (m3_rm, m3_qty, m3_wip)]:
-                            if m_select != "- ไม่ระบุ -" and q_val > 0:
-                                code_part = m_select.split(" | ")[0]
-                                name_part = m_select.split(" | ")[1].split(" (")[0]
-                                unit_part = m_select.split("(")[1].split(" ")[1].replace(")", "")
-                                mats_to_add.append({
-                                    "job_id": new_job_id,
-                                    "rm_code": code_part,
-                                    "rm_name": name_part,
-                                    "req_qty": q_val,
-                                    "unit": unit_part,
-                                    "target_wip": w_target,
-                                    "status": "PENDING (รอเบิก)"
-                                })
-                        
-                        if mats_to_add:
-                            st.session_state.job_materials = pd.concat([st.session_state.job_materials, pd.DataFrame(mats_to_add)], ignore_index=True)
-                        
-                        st.success(f"เปิด Job `{new_job_id}` และบันทึกสูตรวัตถุดิบเรียบร้อยแล้ว!")
-                        st.rerun()
-                    else:
-                        st.error("กรุณากรอก Job ID และชื่อสินค้าให้ครบถ้วน")
-
-    # =================================================================
-    # ส่วนที่ 3: คลังสินค้าสำเร็จรูป (FINISHED GOODS - FG & SALES)
-    # =================================================================
-    elif main_menu.startswith("🚚 3"):
-        st.title("🚚 คลังสินค้าสำเร็จรูปและการจัดส่ง (FG & Delivery)")
-        st.caption("ตรวจเช็คสินค้าพร้อมขาย รับเข้าจากผลิต และตัดจ่ายส่งมอบลูกค้า")
-        
-        fg_tab1, fg_tab2, fg_tab3 = st.tabs(["📦 สินค้าคงคลัง FG", "📥 รับเข้า FG จากการผลิต", "🚛 บันทึกการส่งมอบ/ขายออก"])
-        
-        with fg_tab1:
-            st.subheader("รายการบรรจุภัณฑ์สำเร็จรูปพร้อมขาย (FG Stock)")
-            st.dataframe(st.session_state.fg_inventory, use_container_width=True)
-            
-        with fg_tab2:
-            st.subheader("รับสินค้าสำเร็จรูปเข้าคลัง FG (จาก WIP 8)")
-            with st.form("fg_in_form"):
-                fg_list = [f"{r['fg_code']} - {r['name']} ({r['customer']})" for _, r in st.session_state.fg_inventory.iterrows()]
-                selected_fg = st.selectbox("เลือกรายการ FG:", fg_list)
-                in_qty = st.number_input("จำนวนที่ผลิตเสร็จรับเข้าคลัง:", min_value=1, step=100)
-                submit_fg_in = st.form_submit_button("📥 บันทึกรับเข้า FG")
-                
-                if submit_fg_in:
-                    fg_code_target = selected_fg.split(" - ")[0]
-                    idx = st.session_state.fg_inventory[st.session_state.fg_inventory['fg_code'] == fg_code_target].index[0]
-                    st.session_state.fg_inventory.loc[idx, 'in_stock'] += in_qty
-                    st.session_state.fg_inventory.loc[idx, 'last_update'] = datetime.now().strftime("%Y-%m-%d")
-                    st.success(f"เพิ่มสต็อก FG `{fg_code_target}` จำนวน {in_qty:,} หน่วย เรียบร้อย!")
-                    st.rerun()
-
-        with fg_tab3:
-            st.subheader("ตัดสต็อกขาย / ส่งมอบสินค้าให้ลูกค้า")
-            with st.form("fg_out_form"):
-                fg_list_out = [f"{r['fg_code']} - {r['name']} (คงเหลือ: {r['in_stock']:,} {r['unit']})" for _, r in st.session_state.fg_inventory.iterrows()]
-                selected_fg_out = st.selectbox("เลือกสินค้าที่ส่งมอบ:", fg_list_out)
-                do_num = st.text_input("เลขที่ใบส่งสินค้า / DO Number (เช่น DO-2026-0801)")
-                out_qty = st.number_input("จำนวนที่ตัดส่งมอบ:", min_value=1, step=100)
-                sale_date = st.date_input("วันที่ส่งมอบสินค้า:", datetime.now())
-                submit_fg_out = st.form_submit_button("🚛 บันทึกการตัดส่งมอบ")
-                
-                if submit_fg_out:
-                    fg_code_target = selected_fg_out.split(" - ")[0]
-                    idx = st.session_state.fg_inventory[st.session_state.fg_inventory['fg_code'] == fg_code_target].index[0]
-                    current_stock = st.session_state.fg_inventory.loc[idx, 'in_stock']
-                    
-                    if out_qty > current_stock:
-                        st.error("จำนวนที่ต้องการตัดส่งมอบ เกินกว่าจำนวนสินค้าที่มีอยู่ในคลัง!")
-                    else:
-                        st.session_state.fg_inventory.loc[idx, 'in_stock'] -= out_qty
-                        
-                        log_entry = {
-                            "date": sale_date.strftime("%Y-%m-%d"),
-                            "fg_code": fg_code_target,
-                            "name": st.session_state.fg_inventory.loc[idx, 'name'],
-                            "customer": st.session_state.fg_inventory.loc[idx, 'customer'],
-                            "sold_qty": out_qty,
-                            "unit": st.session_state.fg_inventory.loc[idx, 'unit'],
-                            "do_number": do_num,
-                            "operator": user['name']
-                        }
-                        st.session_state.fg_sales_log = pd.concat([pd.DataFrame([log_entry]), st.session_state.fg_sales_log], ignore_index=True)
-                        st.success(f"ตัดสต็อกส่งมอบ `{fg_code_target}` จำนวน {out_qty:,} หน่วย เรียบร้อยแล้ว!")
-                        st.rerun()
-
-            st.markdown("---")
-            st.subheader("📜 ประวัติการขายและการจัดส่งสินค้า (Sales Log)")
-            st.dataframe(st.session_state.fg_sales_log, use_container_width=True)
-
-# =====================================================================
-# 4. APP CONTROLLER
-# =====================================================================
-if not st.session_state.logged_in:
-    login_screen()
-else:
-    main_app()
+if __name__ == "__main__":
+    if not st.session_state.logged_in:
+        login_screen()
+    else:
+        main_app()
