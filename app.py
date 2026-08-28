@@ -3,7 +3,7 @@ import pandas as pd
 import sqlite3
 from datetime import datetime
 
-st.set_page_config(page_title="ระบบควบคุมสินค้า & การผลิต (SQLite)", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="ระบบควบคุมสินค้า & การผลิต (SQLite + Admin Delete)", layout="wide", initial_sidebar_state="collapsed")
 
 # ซ่อนแถบ Sidebar ของ Streamlit
 st.markdown("""
@@ -161,6 +161,13 @@ def deduce_wip_qty(job_id, stage, qty):
     conn.commit()
     conn.close()
 
+def delete_record(table_name, condition_column, condition_value):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute(f"DELETE FROM {table_name} WHERE {condition_column} = ?", (condition_value,))
+    conn.commit()
+    conn.close()
+
 # =====================================================================
 # 4. LOGIN SCREEN
 # =====================================================================
@@ -241,6 +248,14 @@ def main_app():
                     st.rerun()
             else:
                 st.error("🔒 คุณไม่มีสิทธิ์เข้าถึงส่วนงานการผลิต")
+
+        # เพิ่มปุ่มเมนูจัดการลบข้อมูลเฉพาะ Admin
+        if role == "Admin":
+            st.markdown("---")
+            st.markdown("### ⚙️ ผู้ดูแลระบบ (Admin Only)")
+            if st.button("🗑️ 7. จัดการ & ลบข้อมูลที่บันทึกผิดพลาด", use_container_width=True):
+                st.session_state.current_page = "delete_manager"
+                st.rerun()
 
     else:
         if st.button("⬅️ กลับสู่หน้าหลัก (Main Dashboard)"):
@@ -429,6 +444,85 @@ def main_app():
         st.subheader("📊 สต็อก WIP คงเหลือในแต่ละแผนก (รอแผนกถัดไปมาดึง)")
         df_wip_all = load_data("SELECT * FROM inventory_wip WHERE qty > 0")
         st.dataframe(df_wip_all, use_container_width=True)
+
+    # -------------------------------------------------------------
+    # หน้า 7: ลบข้อมูล (เฉพาะ Admin เท่านั้น)
+    # -------------------------------------------------------------
+    elif st.session_state.current_page == "delete_manager":
+        if role != "Admin":
+            st.error("🔒 เฉพาะผู้ดูแลระบบ (Admin) เท่านั้นที่สามารถใช้หน้านี้ได้")
+        else:
+            st.subheader("🗑️ ระบบจัดการ & ลบข้อมูลที่คีย์ผิดพลาด")
+            st.warning("⚠️ การลบข้อมูลจะลบออกจากฐานข้อมูล SQLite ถาวร กรุณาตรวจสอบให้แน่ใจก่อนกดลบ")
+            
+            tab_rm, tab_job, tab_wip, tab_fg, tab_log = st.tabs([
+                "📦 ลบวัตถุดิบ (RM)", 
+                "🏗️ ลบ Job Order", 
+                "📊 ลบสต็อก WIP", 
+                "🏆 ลบสินค้า FG", 
+                "📜 ลบประวัติเบิกจ่าย"
+            ])
+            
+            # Tab 1: ลบ RM
+            with tab_rm:
+                df = load_data("SELECT * FROM inventory_rm")
+                st.dataframe(df, use_container_width=True)
+                if not df.empty:
+                    del_code = st.selectbox("เลือกรหัส RM ที่ต้องการลบ:", df['code'].tolist(), key="del_rm_key")
+                    if st.button("🗑️ ยืนยันลบวัตถุดิบนี้", key="btn_del_rm"):
+                        delete_record("inventory_rm", "code", del_code)
+                        st.success(f"ลบรหัส {del_code} เรียบร้อยแล้ว")
+                        st.rerun()
+
+            # Tab 2: ลบ Job
+            with tab_job:
+                df = load_data("SELECT * FROM jobs")
+                st.dataframe(df, use_container_width=True)
+                if not df.empty:
+                    del_job = st.selectbox("เลือก Job Order ที่ต้องการลบ:", df['job_id'].tolist(), key="del_job_key")
+                    if st.button("🗑️ ยืนยันลบ Job นี้", key="btn_del_job"):
+                        delete_record("jobs", "job_id", del_job)
+                        st.success(f"ลบ {del_job} เรียบร้อยแล้ว")
+                        st.rerun()
+
+            # Tab 3: ลบ WIP
+            with tab_wip:
+                df = load_data("SELECT * FROM inventory_wip")
+                st.dataframe(df, use_container_width=True)
+                if not df.empty:
+                    wip_opts = [f"{r['id']} - {r['job_id']} [{r['stage']}] ({r['qty']} {r['unit']})" for _, r in df.iterrows()]
+                    del_wip_str = st.selectbox("เลือกรายการ WIP ที่ต้องการลบ:", wip_opts, key="del_wip_key")
+                    del_wip_id = int(del_wip_str.split(" - ")[0])
+                    if st.button("🗑️ ยืนยันลบ WIP นี้", key="btn_del_wip"):
+                        delete_record("inventory_wip", "id", del_wip_id)
+                        st.success("ลบรายการ WIP เรียบร้อยแล้ว")
+                        st.rerun()
+
+            # Tab 4: ลบ FG
+            with tab_fg:
+                df = load_data("SELECT * FROM inventory_fg")
+                st.dataframe(df, use_container_width=True)
+                if not df.empty:
+                    fg_opts = [f"{r['id']} - {r['job_id']} : {r['product_name']} ({r['qty']} {r['unit']})" for _, r in df.iterrows()]
+                    del_fg_str = st.selectbox("เลือกรายการ FG ที่ต้องการลบ:", fg_opts, key="del_fg_key")
+                    del_fg_id = int(del_fg_str.split(" - ")[0])
+                    if st.button("🗑️ ยืนยันลบ FG นี้", key="btn_del_fg"):
+                        delete_record("inventory_fg", "id", del_fg_id)
+                        st.success("ลบรายการ FG เรียบร้อยแล้ว")
+                        st.rerun()
+
+            # Tab 5: ลบ History Log
+            with tab_log:
+                df = load_data("SELECT * FROM history_logs ORDER BY id DESC")
+                st.dataframe(df, use_container_width=True)
+                if not df.empty:
+                    log_opts = [f"{r['id']} - [{r['issue_date']}] Job: {r['job_id']} -> {r['target_wip']}" for _, r in df.iterrows()]
+                    del_log_str = st.selectbox("เลือกประวัติที่ต้องการลบ:", log_opts, key="del_log_key")
+                    del_log_id = int(del_log_str.split(" - ")[0])
+                    if st.button("🗑️ ยืนยันลบประวัตินี้", key="btn_del_log"):
+                        delete_record("history_logs", "id", del_log_id)
+                        st.success("ลบประวัติรายการเรียบร้อยแล้ว")
+                        st.rerun()
 
 # =====================================================================
 # 6. ENTRY POINT
