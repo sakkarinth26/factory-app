@@ -274,7 +274,7 @@ def main_app():
                 code = c1.text_input("รหัส RM")
                 name = c2.text_input("ชื่อวัตถุดิบ")
                 qty = c3.number_input("จำนวนรับเข้า", min_value=0.1)
-                unit = c4.selectbox("หน่วยนับ", ["Kg", "ม้วน", "ชิ้น", "ชุด"])
+                unit = c4.selectbox("หน่วยนับ", ["Kg", "ม้วน", "เมตร", "กล่อง"])
                 if st.form_submit_button("💾 บันทึกรับเข้า"):
                     conn = get_connection()
                     c = conn.cursor()
@@ -301,7 +301,7 @@ def main_app():
             j_id = st.text_input("เลขที่ Job Order (เช่น JOB-2026-002)")
             p_name = st.text_input("ชื่อสินค้า/ซองบรรจุภัณฑ์")
             t_qty = st.number_input("จำนวนที่ต้องการผลิตรวม", min_value=1, value=10000)
-            u_name = st.selectbox("หน่วยผลิตหลัก", ["ซอง", "ม้วน", "ชิ้น", "Kg"])
+            u_name = st.selectbox("หน่วยผลิตหลัก", ["ซอง", "ม้วน",  "Kg"])
             
             if st.form_submit_button("💾 บันทึกเปิด Job"):
                 conn = get_connection()
