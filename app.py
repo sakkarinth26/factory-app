@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
+import sqlite3
 from datetime import datetime
 
-st.set_page_config(page_title="ระบบควบคุมสินค้า & การผลิต (Multi-WIP)", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="ระบบควบคุมสินค้า & การผลิต (SQLite)", layout="wide", initial_sidebar_state="collapsed")
 
-# ซ่อนแถบ Sidebar
+# ซ่อนแถบ Sidebar ของ Streamlit
 st.markdown("""
     <style>
         [data-testid="collapsedControl"] {display: none;}
@@ -13,7 +14,96 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =====================================================================
-# 1. USER DATABASE & STAGES
+# 1. DATABASE SETUP (SQLITE)
+# =====================================================================
+DB_FILE = "factory_data.db"
+
+def get_connection():
+    return sqlite3.connect(DB_FILE)
+
+def init_db():
+    conn = get_connection()
+    c = conn.cursor()
+    
+    # ตาราง 1: คลังวัตถุดิบ (RM)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS inventory_rm (
+            code TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            qty REAL NOT NULL,
+            unit TEXT NOT NULL
+        )
+    ''')
+
+    # ตาราง 2: Job Orders
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS jobs (
+            job_id TEXT PRIMARY KEY,
+            product_name TEXT NOT NULL,
+            target_qty REAL NOT NULL,
+            unit TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    ''')
+
+    # ตาราง 3: สต็อก WIP รายแผนก
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS inventory_wip (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            qty REAL NOT NULL,
+            unit TEXT NOT NULL,
+            UNIQUE(job_id, stage)
+        )
+    ''')
+
+    # ตาราง 4: คลังสินค้าสำเร็จรูป (FG)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS inventory_fg (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            product_name TEXT NOT NULL,
+            qty REAL NOT NULL,
+            unit TEXT NOT NULL,
+            in_date TEXT NOT NULL
+        )
+    ''')
+
+    # ตาราง 5: ประวัติการเบิกจ่าย / ย้าย WIP
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS history_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            target_wip TEXT NOT NULL,
+            mat_type TEXT NOT NULL,
+            code_name TEXT NOT NULL,
+            qty REAL NOT NULL,
+            unit TEXT NOT NULL,
+            issue_date TEXT NOT NULL
+        )
+    ''')
+
+    # สุ่มเพิ่มข้อมูลเริ่มต้นหากฐานข้อมูลยังว่างเปล่า
+    c.execute("SELECT COUNT(*) FROM inventory_rm")
+    if c.fetchone()[0] == 0:
+        default_rm = [
+            ("RM-001", "ม้วนฟิล์ม PET 12u", 5000.0, "Kg"),
+            ("RM-002", "ม้วนฟิล์ม LLDPE 40u", 4000.0, "Kg"),
+            ("RM-003", "หมึกพิมพ์ Solvent Base", 300.0, "Kg"),
+            ("RM-004", "กาว PU Dry Lamination", 500.0, "Kg"),
+            ("RM-005", "จุกฝาเกลียว (Spout 10mm)", 50000.0, "ชิ้น")
+        ]
+        c.executemany("INSERT INTO inventory_rm VALUES (?, ?, ?, ?)", default_rm)
+        
+    conn.commit()
+    conn.close()
+
+# เรียกใช้งานครั้งแรกเพื่อสร้าง DB
+init_db()
+
+# =====================================================================
+# 2. USER DATABASE & CONSTANTS
 # =====================================================================
 USER_DATABASE = {
     "admin": {"password": "888", "name": "ผู้ดูแลระบบ", "role": "Admin"},
@@ -38,54 +128,41 @@ if "user_info" not in st.session_state:
 if "current_page" not in st.session_state:
     st.session_state.current_page = "main_menu"
 
-# --- ฐานข้อมูลจำลอง ---
-if "inventory_rm" not in st.session_state:
-    st.session_state.inventory_rm = pd.DataFrame([
-        {"code": "RM-001", "name": "ม้วนฟิล์ม PET 12u", "qty": 5000.0, "unit": "Kg"},
-        {"code": "RM-002", "name": "ม้วนฟิล์ม LLDPE 40u", "qty": 4000.0, "unit": "Kg"},
-        {"code": "RM-003", "name": "หมึกพิมพ์ Solvent Base", "qty": 300.0, "unit": "Kg"},
-        {"code": "RM-004", "name": "กาว PU Dry Lamination", "qty": 500.0, "unit": "Kg"},
-        {"code": "RM-005", "name": "จุกฝาเกลียว (Spout 10mm)", "qty": 50000.0, "unit": "ชิ้น"}
-    ])
+# =====================================================================
+# 3. HELPER FUNCTIONS FOR DB READ/WRITE
+# =====================================================================
+def load_data(query):
+    conn = get_connection()
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    return df
 
-# ตารางเก็บ WIP คงเหลือของแต่ละขั้นตอนแยกตาม Job
-if "inventory_wip" not in st.session_state:
-    st.session_state.inventory_wip = pd.DataFrame(columns=["job_id", "stage", "qty", "unit"])
-
-if "inventory_fg" not in st.session_state:
-    st.session_state.inventory_fg = pd.DataFrame([
-        {"job_id": "JOB-2026-000", "product_name": "ซองกาแฟ 250g", "qty": 15000, "unit": "ซอง", "in_date": "2026-08-20"}
-    ])
-
-if "jobs" not in st.session_state:
-    st.session_state.jobs = pd.DataFrame([
-        {"job_id": "JOB-2026-001", "product_name": "ซองติดจุก 250ml", "target_qty": 20000, "unit": "ซอง"}
-    ])
-
-if "issued_materials" not in st.session_state:
-    st.session_state.issued_materials = pd.DataFrame(columns=["job_id", "target_wip", "mat_type", "code_name", "qty", "unit", "issue_date"])
-
-# Helper function สำหรับอัปเดตสต็อก WIP
-def add_wip_qty(job_id, stage, qty, unit):
-    df = st.session_state.inventory_wip
-    match = df[(df['job_id'] == job_id) & (df['stage'] == stage)]
-    if not match.empty:
-        idx = match.index[0]
-        st.session_state.inventory_wip.loc[idx, 'qty'] += qty
+def update_wip_qty(job_id, stage, qty, unit):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT qty FROM inventory_wip WHERE job_id = ? AND stage = ?", (job_id, stage))
+    row = c.fetchone()
+    if row:
+        new_qty = row[0] + qty
+        c.execute("UPDATE inventory_wip SET qty = ? WHERE job_id = ? AND stage = ?", (new_qty, job_id, stage))
     else:
-        new_row = {"job_id": job_id, "stage": stage, "qty": qty, "unit": unit}
-        st.session_state.inventory_wip = pd.concat([st.session_state.inventory_wip, pd.DataFrame([new_row])], ignore_index=True)
+        c.execute("INSERT INTO inventory_wip (job_id, stage, qty, unit) VALUES (?, ?, ?, ?)", (job_id, stage, qty, unit))
+    conn.commit()
+    conn.close()
 
-# Helper function สำหรับลดสต็อก WIP เมื่อถูกดึงไปใช้
 def deduce_wip_qty(job_id, stage, qty):
-    df = st.session_state.inventory_wip
-    match = df[(df['job_id'] == job_id) & (df['stage'] == stage)]
-    if not match.empty:
-        idx = match.index[0]
-        st.session_state.inventory_wip.loc[idx, 'qty'] -= qty
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT qty FROM inventory_wip WHERE job_id = ? AND stage = ?", (job_id, stage))
+    row = c.fetchone()
+    if row:
+        new_qty = max(0.0, row[0] - qty)
+        c.execute("UPDATE inventory_wip SET qty = ? WHERE job_id = ? AND stage = ?", (new_qty, job_id, stage))
+    conn.commit()
+    conn.close()
 
 # =====================================================================
-# 2. LOGIN SCREEN
+# 4. LOGIN SCREEN
 # =====================================================================
 def login_screen():
     st.markdown("<h2 style='text-align: center;'>🔐 เข้าสู่ระบบควบคุมสินค้า & การผลิต</h2>", unsafe_allow_html=True)
@@ -105,7 +182,7 @@ def login_screen():
                     st.error("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง")
 
 # =====================================================================
-# 3. MAIN APPLICATION
+# 5. MAIN APPLICATION
 # =====================================================================
 def main_app():
     user = st.session_state.user_info
@@ -114,7 +191,7 @@ def main_app():
     # Header
     head_col1, head_col2 = st.columns([3, 1])
     with head_col1:
-        st.title("🏭 ระบบคลังสินค้า & ควบคุมกระบวนการผลิต (Multi-WIP)")
+        st.title("🏭 ระบบคลังสินค้า & ควบคุมกระบวนการผลิต (SQLite DB)")
         st.caption(f"👤 ผู้ใช้งาน: **{user['name']}** | สิทธิ์การใช้งาน: **{role}**")
     with head_col2:
         st.write("")
@@ -184,16 +261,21 @@ def main_app():
                 qty = c3.number_input("จำนวนรับเข้า", min_value=0.1)
                 unit = c4.selectbox("หน่วยนับ", ["Kg", "ม้วน", "ชิ้น", "ชุด"])
                 if st.form_submit_button("💾 บันทึกรับเข้า"):
-                    idx = st.session_state.inventory_rm[st.session_state.inventory_rm['code'] == code].index
-                    if len(idx) > 0:
-                        st.session_state.inventory_rm.loc[idx[0], 'qty'] += qty
+                    conn = get_connection()
+                    c = conn.cursor()
+                    c.execute("SELECT qty FROM inventory_rm WHERE code = ?", (code,))
+                    row = c.fetchone()
+                    if row:
+                        c.execute("UPDATE inventory_rm SET qty = ? WHERE code = ?", (row[0] + qty, code))
                     else:
-                        new_rm = {"code": code, "name": name, "qty": qty, "unit": unit}
-                        st.session_state.inventory_rm = pd.concat([st.session_state.inventory_rm, pd.DataFrame([new_rm])], ignore_index=True)
+                        c.execute("INSERT INTO inventory_rm VALUES (?, ?, ?, ?)", (code, name, qty, unit))
+                    conn.commit()
+                    conn.close()
                     st.success("บันทึกรับเข้าเรียบร้อย")
                     st.rerun()
                     
-        st.dataframe(st.session_state.inventory_rm, use_container_width=True)
+        df_rm = load_data("SELECT * FROM inventory_rm")
+        st.dataframe(df_rm, use_container_width=True)
 
     # -------------------------------------------------------------
     # หน้า 2: เปิด Job Order ใหม่
@@ -207,31 +289,39 @@ def main_app():
             u_name = st.selectbox("หน่วยผลิตหลัก", ["ซอง", "ม้วน", "ชิ้น", "Kg"])
             
             if st.form_submit_button("💾 บันทึกเปิด Job"):
-                job_data = {"job_id": j_id, "product_name": p_name, "target_qty": t_qty, "unit": u_name}
-                st.session_state.jobs = pd.concat([st.session_state.jobs, pd.DataFrame([job_data])], ignore_index=True)
-                st.success(f"เปิด Job {j_id} เรียบร้อยแล้ว")
+                conn = get_connection()
+                c = conn.cursor()
+                try:
+                    c.execute("INSERT INTO jobs VALUES (?, ?, ?, ?, ?)", 
+                              (j_id, p_name, t_qty, u_name, datetime.now().strftime("%Y-%m-%d %H:%M")))
+                    conn.commit()
+                    st.success(f"เปิด Job {j_id} เรียบร้อยแล้ว")
+                except sqlite3.IntegrityError:
+                    st.error("เลขที่ Job นี้มีอยู่ในระบบแล้ว!")
+                finally:
+                    conn.close()
                 st.rerun()
         
         st.markdown("### รายการ Job ทั้งหมด")
-        st.dataframe(st.session_state.jobs, use_container_width=True)
+        df_jobs = load_data("SELECT * FROM jobs ORDER BY created_at DESC")
+        st.dataframe(df_jobs, use_container_width=True)
 
     # -------------------------------------------------------------
-    # หน้า 3: บันทึกการผลิต & ดึง WIP/RM มาทำต่อ (จุดสำคัญ)
+    # หน้า 3: บันทึกการผลิต & ดึง WIP/RM มาทำต่อ
     # -------------------------------------------------------------
     elif st.session_state.current_page == "process_wip":
         st.subheader("🔄 บันทึกการผลิตประจำแผนก (ดึง RM / WIP ก่อนหน้า มาผลิตต่อ)")
         
-        if st.session_state.jobs.empty:
+        df_jobs = load_data("SELECT job_id FROM jobs")
+        if df_jobs.empty:
             st.warning("ยังไม่มี Job Order ในระบบ กรุณาเปิด Job ก่อน")
         else:
-            job_list = st.session_state.jobs['job_id'].tolist()
+            job_list = df_jobs['job_id'].tolist()
             sel_job = st.selectbox("1️⃣ เลือก Job Order ที่ต้องการทำงาน:", job_list)
             
-            # ดึงข้อมูล RM และ WIP ของ Job นี้ที่มีอยู่
-            current_wip_df = st.session_state.inventory_wip[
-                (st.session_state.inventory_wip['job_id'] == sel_job) & 
-                (st.session_state.inventory_wip['qty'] > 0)
-            ]
+            # โหลด RM และ WIP
+            df_rm = load_data("SELECT * FROM inventory_rm WHERE qty > 0")
+            df_wip = load_data(f"SELECT * FROM inventory_wip WHERE job_id = '{sel_job}' AND qty > 0")
             
             st.markdown("---")
             col_in, col_out = st.columns(2)
@@ -246,21 +336,23 @@ def main_app():
                 unit_label = ""
 
                 if input_type == "เบิก RM จากคลังหลัก":
-                    rm_opts = [f"{r['code']} - {r['name']} (เหลือ {r['qty']} {r['unit']})" for _, r in st.session_state.inventory_rm.iterrows()]
-                    if rm_opts:
+                    if df_rm.empty:
+                        st.info("⚠️ วัตถุดิบในคลังหลักหมด")
+                    else:
+                        rm_opts = [f"{r['code']} - {r['name']} (เหลือ {r['qty']} {r['unit']})" for _, r in df_rm.iterrows()]
                         sel_rm_str = st.selectbox("เลือกวัตถุดิบ RM:", rm_opts)
                         used_rm_code = sel_rm_str.split(" - ")[0]
-                        rm_data = st.session_state.inventory_rm[st.session_state.inventory_rm['code'] == used_rm_code].iloc[0]
+                        rm_data = df_rm[df_rm['code'] == used_rm_code].iloc[0]
                         available_max = float(rm_data['qty'])
                         unit_label = rm_data['unit']
                 else:
-                    if current_wip_df.empty:
+                    if df_wip.empty:
                         st.info("⚠️ ยังไม่มี WIP ของแผนกก่อนหน้าสำหรับ Job นี้")
                     else:
-                        wip_opts = [f"{w['stage']} (คงเหลือ {w['qty']} {w['unit']})" for _, w in current_wip_df.iterrows()]
+                        wip_opts = [f"{w['stage']} (คงเหลือ {w['qty']} {w['unit']})" for _, w in df_wip.iterrows()]
                         sel_wip_str = st.selectbox("เลือก WIP จากแผนกก่อนหน้า:", wip_opts)
                         used_wip_stage = sel_wip_str.split(" (")[0]
-                        wip_data = current_wip_df[current_wip_df['stage'] == used_wip_stage].iloc[0]
+                        wip_data = df_wip[df_wip['stage'] == used_wip_stage].iloc[0]
                         available_max = float(wip_data['qty'])
                         unit_label = wip_data['unit']
 
@@ -277,55 +369,69 @@ def main_app():
                 if input_qty <= 0:
                     st.error("กรุณาระบุจำนวนวัตถุดิบ/WIP ที่นำมาใช้ผลิต")
                 else:
+                    conn = get_connection()
+                    c = conn.cursor()
+                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+
                     # 1. ตัดสต็อกขาเข้า
                     if input_type == "เบิก RM จากคลังหลัก" and used_rm_code:
-                        rm_idx = st.session_state.inventory_rm[st.session_state.inventory_rm['code'] == used_rm_code].index[0]
-                        st.session_state.inventory_rm.loc[rm_idx, 'qty'] -= input_qty
-                        mat_name = st.session_state.inventory_rm.loc[rm_idx, 'name']
-                        # บันทึกประวัติ
-                        iss_entry = {"job_id": sel_job, "target_wip": target_stage, "mat_type": "RM", "code_name": f"{used_rm_code} ({mat_name})", "qty": input_qty, "unit": unit_label, "issue_date": datetime.now().strftime("%Y-%m-%d %H:%M")}
-                        st.session_state.issued_materials = pd.concat([st.session_state.issued_materials, pd.DataFrame([iss_entry])], ignore_index=True)
+                        c.execute("UPDATE inventory_rm SET qty = qty - ? WHERE code = ?", (input_qty, used_rm_code))
+                        c.execute("SELECT name FROM inventory_rm WHERE code = ?", (used_rm_code,))
+                        mat_name = c.fetchone()[0]
+                        c.execute("INSERT INTO history_logs (job_id, target_wip, mat_type, code_name, qty, unit, issue_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                  (sel_job, target_stage, "RM", f"{used_rm_code} ({mat_name})", input_qty, unit_label, now_str))
 
                     elif input_type == "ดึง WIP จากแผนกก่อนหน้า" and used_wip_stage:
                         deduce_wip_qty(sel_job, used_wip_stage, input_qty)
-                        iss_entry = {"job_id": sel_job, "target_wip": target_stage, "mat_type": "WIP", "code_name": used_wip_stage, "qty": input_qty, "unit": unit_label, "issue_date": datetime.now().strftime("%Y-%m-%d %H:%M")}
-                        st.session_state.issued_materials = pd.concat([st.session_state.issued_materials, pd.DataFrame([iss_entry])], ignore_index=True)
+                        c.execute("INSERT INTO history_logs (job_id, target_wip, mat_type, code_name, qty, unit, issue_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                  (sel_job, target_stage, "WIP", used_wip_stage, input_qty, unit_label, now_str))
+
+                    conn.commit()
+                    conn.close()
 
                     # 2. เพิ่มสต็อกขาออก
                     if target_stage.startswith("FG:"):
-                        job_info = st.session_state.jobs[st.session_state.jobs['job_id'] == sel_job].iloc[0]
-                        fg_entry = {"job_id": sel_job, "product_name": job_info['product_name'], "qty": output_qty, "unit": output_unit, "in_date": datetime.now().strftime("%Y-%m-%d %H:%M")}
-                        st.session_state.inventory_fg = pd.concat([st.session_state.inventory_fg, pd.DataFrame([fg_entry])], ignore_index=True)
-                        st.success(f"บันทึกการผลิตสำเร็จ! สินค้าโอนเข้าคลัง FG เรียบร้อยแล้ว")
+                        conn = get_connection()
+                        c = conn.cursor()
+                        c.execute("SELECT product_name FROM jobs WHERE job_id = ?", (sel_job,))
+                        p_name = c.fetchone()[0]
+                        c.execute("INSERT INTO inventory_fg (job_id, product_name, qty, unit, in_date) VALUES (?, ?, ?, ?, ?)",
+                                  (sel_job, p_name, output_qty, output_unit, now_str))
+                        conn.commit()
+                        conn.close()
+                        st.success("บันทึกการผลิตสำเร็จ! โอนเข้าคลัง FG เรียบร้อยแล้ว")
                     else:
-                        add_wip_qty(sel_job, target_stage, output_qty, output_unit)
-                        st.success(f"บันทึกการผลิตสำเร็จ! งานถูกส่งไปเป็นสต็อกคงเหลืออยู่ที่ **{target_stage}** เรียบร้อยแล้ว")
+                        update_wip_qty(sel_job, target_stage, output_qty, output_unit)
+                        st.success(f"บันทึกการผลิตสำเร็จ! ผลลัพธ์ส่งเข้า **{target_stage}** เรียบร้อยแล้ว")
 
                     st.rerun()
 
     # -------------------------------------------------------------
-    # หน้า 4: สต็อกสินค้าสำเร็จรูป (FG Stock)
+    # หน้า 4: คลังสินค้าสำเร็จรูป (FG Stock)
     # -------------------------------------------------------------
     elif st.session_state.current_page == "fg_stock":
         st.subheader("🏆 รายการสินค้าสำเร็จรูปในคลัง (FG Stock)")
-        st.dataframe(st.session_state.inventory_fg, use_container_width=True)
+        df_fg = load_data("SELECT * FROM inventory_fg")
+        st.dataframe(df_fg, use_container_width=True)
 
     # -------------------------------------------------------------
     # หน้า 5: ประวัติการทำรายการ
     # -------------------------------------------------------------
     elif st.session_state.current_page == "history":
         st.subheader("📜 ประวัติการเบิก RM และการดึง WIP ไปใช้งาน")
-        st.dataframe(st.session_state.issued_materials, use_container_width=True)
+        df_hist = load_data("SELECT * FROM history_logs ORDER BY id DESC")
+        st.dataframe(df_hist, use_container_width=True)
 
     # -------------------------------------------------------------
-    # หน้า 6: สต็อก WIP รายแผนก (ดูยอดคงเหลือที่รอผลิตต่อ)
+    # หน้า 6: สต็อก WIP รายแผนก
     # -------------------------------------------------------------
     elif st.session_state.current_page == "wip_stock":
         st.subheader("📊 สต็อก WIP คงเหลือในแต่ละแผนก (รอแผนกถัดไปมาดึง)")
-        st.dataframe(st.session_state.inventory_wip[st.session_state.inventory_wip['qty'] > 0], use_container_width=True)
+        df_wip_all = load_data("SELECT * FROM inventory_wip WHERE qty > 0")
+        st.dataframe(df_wip_all, use_container_width=True)
 
 # =====================================================================
-# 4. ENTRY POINT
+# 6. ENTRY POINT
 # =====================================================================
 if __name__ == "__main__":
     if not st.session_state.logged_in:
